@@ -1820,11 +1820,13 @@ private:
     std::chrono::steady_clock::time_point _startTime;
     bool _connected;
     Request _request;
+    net::AsyncConnectResult _result; // last connection tentative result
     FinishedCallback _onFinished;
     ConnectFailCallback _onConnectFail;
     std::shared_ptr<Response> _response;
-    std::weak_ptr<StreamSocket> _socket; ///< Must be the last member.
-    net::AsyncConnectResult _result; // last connection tentative result
+    /// Keep _socket as last member so it is destructed first, ensuring that
+    /// the peer members it depends on are not destructed before it
+    std::weak_ptr<StreamSocket> _socket;
 };
 
 /// HTTP Get a URL synchronously.
@@ -1844,15 +1846,12 @@ get(const std::string& url, const std::string& path,
     return httpSession->syncRequest(http::Request(path), timeout);
 }
 
-namespace server
-{
-
 /// A server http Session to make asynchronous HTTP responses.
-class Session final : public ProtocolHandlerInterface
+class ServerSession final : public ProtocolHandlerInterface
 {
 public:
-    /// Construct a Session instance.
-    Session()
+    /// Construct a ServerSession instance.
+    ServerSession()
         : _timeout(getDefaultTimeout())
         , _pos(-1)
         , _size(0)
@@ -1879,7 +1878,7 @@ public:
     std::chrono::microseconds getTimeout() const { return _timeout; }
 
     /// The onFinished callback handler signature.
-    using FinishedCallback = std::function<void(const std::shared_ptr<Session>& session)>;
+    using FinishedCallback = std::function<void(const std::shared_ptr<ServerSession>& session)>;
 
     /// Set a callback to handle onFinished events from this session.
     /// onFinished is triggered whenever a request has finished,
@@ -1888,9 +1887,9 @@ public:
 
     /// Start an asynchronous upload from a file.
     /// Return true when it dispatches the socket to the SocketPoll.
-    /// Note: when reusing this Session, it is assumed that the socket
+    /// Note: when reusing this ServerSession, it is assumed that the socket
     /// is already added to the SocketPoll on a previous call (do not
-    /// use multiple SocketPoll instances on the same Session).
+    /// use multiple SocketPoll instances on the same ServerSession).
     bool asyncUpload(std::string fromFile, std::string mimeType, int start, int end, bool startIsSuffix, http::StatusCode statusCode = http::StatusCode::OK)
     {
         _start = start;
@@ -2031,7 +2030,7 @@ public:
     void dumpState(std::ostream& os, const std::string& indent) const override
     {
         const auto now = std::chrono::steady_clock::now();
-        os << indent << "http::server::Session: #" << _fd << " (" << (_socket ? "have" : "no")
+        os << indent << "http::ServerSession: #" << _fd << " (" << (_socket ? "have" : "no")
            << " socket)";
         os << indent << "\tconnected: " << std::boolalpha << _connected;
         os << indent << "\tstartTime: " << Util::getTimeForLog(now, _startTime);
@@ -2207,9 +2206,10 @@ private:
                          //  e.g. if this is true and start is 5, we will send the last 5 bytes
     http::StatusCode _statusCode;
     FinishedCallback _onFinished;
-    std::shared_ptr<StreamSocket> _socket; ///< Must be the last member.
+    /// Keep _socket as last member so it is destructed first, ensuring that
+    /// the peer members it depends on are not destructed before it
+    std::shared_ptr<StreamSocket> _socket;
 };
-}
 
 inline std::ostream& operator<<(std::ostream& os, const http::Header& header)
 {
